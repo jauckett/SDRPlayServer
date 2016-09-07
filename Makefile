@@ -1,5 +1,6 @@
-CFLAGS?=-O2 -g -Wall -W -I/usr/include/ -I/usr/include/libusb-1.0 
-LDLIBS+= -lusb-1.0  -lmirsdrapi-rsp 
+CFLAGS?=-O2 -g -Wall -W -I/usr/include/ 
+#-I/usr/include/libusb-1.0 
+LDLIBS+= -lmirsdrapi-rsp 
 CC?=gcc
 PROGNAME=sdrplayserver
 
