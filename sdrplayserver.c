@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <signal.h>
 
 #include <string.h>
 #include <err.h>
@@ -29,6 +30,7 @@
 #define SOCKET_ERROR -1
 
 int initSDRPlay();
+void sighandler(int signum);
 
 /* global config parameters */
 float frequencyMHZ = 100000000;
@@ -288,6 +290,14 @@ void usage(void) {
 
 int main(int argc, char **argv) {
 
+//    signal(SIGTERM, sighandler);
+//    signal(SIGINT, sighandler);
+
+
+    // add all signals while testing
+    for (int i=0; i<32; i++) {
+        signal(i, sighandler);
+    }
 
     int freq = 100000000;
     int samp_rate = 2048000;
@@ -335,4 +345,7 @@ int main(int argc, char **argv) {
     return 0;
 }
 
-
+void sighandler(int signum) {
+    printf("Signal caught %d\n", signum);
+    exit(1);
+}
