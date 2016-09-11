@@ -29,8 +29,9 @@
 
 #define SOCKET_ERROR -1
 
-int initSDRPlay();
-void sighandler(int signum);
+
+#include "sdrplayserver.h"
+
 
 /* global config parameters */
 float frequencyMHZ = 100000000;
@@ -90,11 +91,11 @@ void callbackGC(unsigned int gRdB, unsigned int lnaGRdB) {
 /**
 Structure for rtl_tcp command
 SDR# sends these commands upon startup
-2     sample rate
-5     freq correction
 1     frequency
-8     agc mode
+2     sample rate
 3     gain mode
+5     freq correction
+8     agc mode
 13    tuner gain by index
 */
 
@@ -102,6 +103,32 @@ struct sdr_command {
     int8_t cmd;
     int32_t param;
 } __attribute__((packed));
+
+void setSDRPlayFreq(double f) {
+    if (debug) printf("Setting freq to %f hz", f);
+
+    // this method may fail if new frequency is out of current band
+    // would need to check for this cas and call unInit init
+    //
+    // mir_sdr_SetRf(freq, 1, 0);
+
+    mir_sdr_ErrT err;
+    int gRdB = 0;
+    int gRdBsystem = 0;
+    int sps;
+    // only the rfFreq will be set
+    err = mir_sdr_Reinit(&gRdB, 0.0, f/1000000, 0,
+                        0, 0, 0, &gRdBsystem, 0,
+                        &sps, mir_sdr_CHANGE_RF_FREQ);
+    if (err != mir_sdr_Success) {
+        printf("ERROR %d %s\n", err, mir_error_strings[err]);
+    }
+}
+
+void setSDRPlaySampleRate(double sr) {
+    if (debug) printf("Setting sample rate");
+    mir_sdr_SetFs(sr, 1, 0, 0);
+}
 
 
 
@@ -125,20 +152,74 @@ int checkCmd() {
     tv.tv_usec = 5;
     r = select(s+1, &readfds, NULL, NULL, &tv);
     if(r) {
-        printf("RX Data\n");
+//         printf("RX Data\n");
         received = recv(s, &cmd, 5, 0);
         if (received == -1) {
             printf("Negative read\n");
             return -1;
         }
                             
-        printf("CMD RECEIVED : %d\n", cmd.cmd);
-        printf("CMD PARAM    : %d\n", ntohl(cmd.param));
+        if (2) printf("RX CMD : %d PARAM=%d\n", cmd.cmd, ntohl(cmd.param));
+//        if (1) printf("CMD PARAM    : %d\n", ntohl(cmd.param));
 
-        if (cmd.cmd == 1) {
-            if (debug) printf("Setting freq");
-            double freq = ntohl(cmd.param); 
-            mir_sdr_SetRf(freq, 1, 0);
+        long ifgain;
+        printf("  ");
+        switch(cmd.cmd) {
+            case 0x01:
+                printf("set freq %u\n", ntohl(cmd.param));
+                setSDRPlayFreq(ntohl(cmd.param));
+                break;
+            case 0x02:
+                printf("set sample rate %u\n", ntohl(cmd.param));
+                setSDRPlaySampleRate(ntohl(cmd.param));
+                break;
+            case 0x03:
+                printf("NOT IMPLEMENTED set gain mode %u\n", ntohl(cmd.param));
+//                rtlsdr_set_tuner_gain_mode(dev, ntohl(cmd.param));
+                break;
+            case 0x04:
+                printf("NOT IMPLEMENTED set gain %u\n", ntohl(cmd.param));
+//               rtlsdr_set_tuner_gain(dev, ntohl(cmd.param));
+                break;
+            case 0x05:
+                printf("NOT IMPLEMENTED set freq correction %u\n", ntohl(cmd.param));
+//                rtlsdr_set_freq_correction(dev, ntohl(cmd.param));
+                break;
+            case 0x06:
+                ifgain = ntohl(cmd.param);
+                printf("NOT IMPLEMENTED set if stage %ld gain %d\n", ifgain >> 16, (short)(ifgain & 0xffff));
+//                rtlsdr_set_tuner_if_gain(dev, tmp >> 16, (short)(tmp & 0xffff));
+                break;
+            case 0x07:
+                printf("NOT IMPLEMENTED set test mode %u\n", ntohl(cmd.param));
+//                rtlsdr_set_testmode(dev, ntohl(cmd.param));
+                break;
+            case 0x08:
+                printf("NOT IMPLEMENTED set agc mode %u\n", ntohl(cmd.param));
+//                rtlsdr_set_agc_mode(dev, ntohl(cmd.param));
+                break;
+            case 0x09:
+                printf("NOT IMPLEMENTED set direct sampling %u\n", ntohl(cmd.param));
+//                rtlsdr_set_direct_sampling(dev, ntohl(cmd.param));
+                break;
+            case 0x0a:
+                printf("NOT IMPLEMENTED set offset tuning %u\n", ntohl(cmd.param));
+//                rtlsdr_set_offset_tuning(dev, ntohl(cmd.param));
+                break;
+            case 0x0b:
+                printf("NOT IMPLEMENTED set rtl xtal %u\n", ntohl(cmd.param));
+//               rtlsdr_set_xtal_freq(dev, ntohl(cmd.param), 0);
+                break;
+            case 0x0c:
+                printf("NOT IMPLEMENTED set tuner xtal %u\n", ntohl(cmd.param));
+//                rtlsdr_set_xtal_freq(dev, 0, ntohl(cmd.param));
+                break;
+            case 0x0d:
+                printf("NOT IMPLEMENTED set tuner gain by index %u\n", ntohl(cmd.param));
+//                set_gain_by_index(dev, ntohl(cmd.param));
+                break;
+            default:
+                printf("Unknown command %d\n", cmd.cmd);
         }
     } else {
         // socket not ready to read, ignore
@@ -210,7 +291,7 @@ int server() {
                     break;
                 }
                 c++;
-                if (c % 10000 == 0) {
+                if (c % 50000 == 0) {
                     if (debug) printf("Packets read : %ld\n", c);
                 } 
                 s += 336;
@@ -224,6 +305,7 @@ int server() {
     // should not get here
     // TODO add sig handlers to exit gracefully
     if (debug) printf("Server returning\n");
+    close(connfd);
     return 0;
 }
     
@@ -231,9 +313,6 @@ int server() {
 
 
 int initSDRPlay() {
-    ibuf = malloc(samplesPerPacket * sizeof(short));
-    qbuf = malloc(samplesPerPacket * sizeof(short));
-    buffer = malloc(DEFAULT_BUF_LENGTH * sizeof(uint8_t));
 
     printf("Starting SDRPlay\n");
 
@@ -246,7 +325,7 @@ int initSDRPlay() {
     if (ver != MIR_SDR_API_VERSION)
     {
         printf("API Version mismatch %2.2f != %2.2f\n", ver, MIR_SDR_API_VERSION);
-        // TODO cleanup server socket?
+        close(connfd);
         exit(1);
     }
 
@@ -269,12 +348,46 @@ mir_sdr_ErrT mir_sdr_StreamInit(int *gRdB, double fsMHz, double rfMHz,
 
     err = mir_sdr_Init(gainReduction, sampleRateMHZ, frequencyMHZ, mir_sdr_BW_1_536, mir_sdr_IF_Zero, &samplesPerPacket );
     if (err != mir_sdr_Success) {
-        printf("ERROR %d\n", err);
+        printf("ERROR %d %s\n", err, mir_error_strings[err]);
         return 1;
     }
     return 0;
 }
 
+
+/**
+SDRPlay requires reintialising if the new RF is outside the current RF band
+This function checks which band the current and new frequency lie in, and 
+returns true if they are in different bands
+Used to determine if need to call unInit and init
+But, easier to call reInit
+
+*/
+int initRequired(double freqCurrent, double freqNew) {
+
+    int i, indexCurrent, indexNew;
+
+    for (i=ARRAYLEN(frequencyAllocations)-1; i >=0; i--) {
+        if (freqCurrent < frequencyAllocations[i]) {
+            indexCurrent = i;
+        }
+        if (freqNew < frequencyAllocations[i]) {
+            indexNew = i;
+        }
+    }
+   
+    printf("FC=%f FN=%f C=%d N=%d\n", freqCurrent, freqNew, indexCurrent, indexNew);
+    if (indexCurrent != indexNew) {
+        return 1;
+    } else {
+        return 0;
+    } 
+
+
+    
+    
+
+}
 
 void usage(void) {
     printf("mysdrplay, an I/Q spectrum server for SDRPlay receiver\n\n"
@@ -284,6 +397,10 @@ void usage(void) {
            "\t[-s samplerate in Hz (default: 2048000 Hz)]\n"
            "\t[-i interface index (default: 0)]\n"
            "\t[-d enable debug output]\n");
+    int i;
+    for (i=0; i<ARRAYLEN(frequencyAllocations); i++) {
+        printf("Freq range %f\n", frequencyAllocations[i]);
+    }
     exit(1);
 }
 
@@ -340,6 +457,10 @@ int main(int argc, char **argv) {
     printf("Port=%d\n", port);
     printf("Debug=%d\n", debug);
 
+    ibuf = malloc(samplesPerPacket * sizeof(short));
+    qbuf = malloc(samplesPerPacket * sizeof(short));
+    buffer = malloc(DEFAULT_BUF_LENGTH * sizeof(uint8_t));
+
     server();
 
     return 0;
@@ -347,5 +468,6 @@ int main(int argc, char **argv) {
 
 void sighandler(int signum) {
     printf("Signal caught %d\n", signum);
+    close(connfd);
     exit(1);
 }
